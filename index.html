@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parteien-Informationsportal</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1f2430; --muted: #6b7280;
+    --border: #e3e6ea; --accent: #2b5fa8; --accent-soft: #eaf1fb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.5; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 16px; }
+  header h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  header p { color: var(--muted); margin: 0; font-size: .9rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 16px; margin: 16px 0; }
+  .warn { background: #fff7e6; border-color: #ffd591; color: #874d00; font-size: .9rem; }
+  .parteien { display: flex; flex-wrap: wrap; gap: 8px; }
+  .partei-btn { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border: 2px solid var(--border); background: #fff; border-radius: 999px;
+    cursor: pointer; font-size: .9rem; transition: all .15s; }
+  .partei-btn:hover { border-color: var(--accent); }
+  .partei-btn.active { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .tab { padding: 8px 14px; border: none; background: transparent; cursor: pointer;
+    border-bottom: 3px solid transparent; color: var(--muted); font-size: .95rem; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .searchrow { display: flex; gap: 8px; margin-top: 12px; }
+  .searchrow input { flex: 1; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 1rem; }
+  .btn { padding: 10px 16px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; cursor: pointer; font-size: .95rem; }
+  .btn:disabled { background: #9bb3d4; cursor: default; }
+  .item { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+  .item h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .item .meta { color: var(--muted); font-size: .85rem; }
+  .item a { color: var(--accent); text-decoration: none; font-size: .9rem; font-weight: 600; }
+  .item a:hover { text-decoration: underline; }
+  .quelle { display: inline-block; margin-top: 8px; }
+  .empty, .loading { text-align: center; color: var(--muted); padding: 24px; }
+  .biglink { display: inline-block; margin-top: 8px; padding: 10px 16px;
+    background: var(--accent-soft); color: var(--accent); border-radius: 8px;
+    text-decoration: none; font-weight: 600; }
+  footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 24px 0; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ════════════════════════════════════════════════════════════════════
+//  KONFIGURATION – nach dem Deployen des Cloudflare Workers hier
+//  die Worker-URL eintragen (ohne Slash am Ende):
+const WORKER_URL = "https://DEIN-WORKER.workers.dev";
+// ════════════════════════════════════════════════════════════════════
+
+// Bekannte Parteifarben – dienen nur der optischen Unterscheidung, ohne Wertung.
+const FARBEN = {
+  cdu:"#121212", csu:"#0080c8", spd:"#e3000f", gruene:"#46962b", afd:"#009ee0",
+  linke:"#be3075", ssw:"#003d8f", fdp:"#f4d000", bsw:"#6f2d91", volt:"#502379"
+};
+
+// Fallback, falls der Worker (noch) nicht erreichbar ist.
+const FALLBACK = [
+  {id:"cdu",name:"CDU",im_bundestag:true},{id:"csu",name:"CSU",im_bundestag:true},
+  {id:"spd",name:"SPD",im_bundestag:true},{id:"gruene",name:"Bündnis 90/Die Grünen",im_bundestag:true},
+  {id:"afd",name:"AfD",im_bundestag:true},{id:"linke",name:"Die Linke",im_bundestag:true},
+  {id:"ssw",name:"SSW",im_bundestag:true},{id:"fdp",name:"FDP",im_bundestag:false},
+  {id:"bsw",name:"BSW",im_bundestag:false},{id:"volt",name:"Volt",im_bundestag:false}
+];
+
+const TABS = [
+  {id:"personen",label:"Personen"},
+  {id:"reden",label:"Reden"},
+  {id:"drucksachen",label:"Drucksachen"},
+  {id:"programm",label:"Programm"},
+  {id:"presse",label:"Presse / Aktuelles"}
+];
+
+function App() {
+  const konfiguriert = !WORKER_URL.includes("DEIN-WORKER");
+  const [parteien, setParteien] = useState(FALLBACK);
+  const [aktiv, setAktiv] = useState(null);
+  const [tab, setTab] = useState("personen");
+  const [query, setQuery] = useState("");
+  const [items, setItems] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  // Parteiliste vom Worker holen (inkl. Programm-/Presse-URLs)
+  useEffect(() => {
+    if (!konfiguriert) return;
+    fetch(WORKER_URL + "/parteien")
+      .then(r => r.json())
+      .then(d => { if (d.parteien) setParteien(d.parteien); })
+      .catch(() => {});
+  }, []);
+
+  const aktivePartei = parteien.find(p => p.id === aktiv);
+
+  async function laden(p, t, q) {
+    if (!konfiguriert) { setError("Bitte zuerst die Worker-URL im Code eintragen."); return; }
+    if (t === "programm" || t === "presse") { setItems(null); return; }
+    setLoading(true); setError(""); setItems(null);
+    try {
+      let url;
+      if (t === "personen") {
+        url = `${WORKER_URL}/personen?partei=${encodeURIComponent(p.name)}&max=80`;
+      } else {
+        const ressource = t === "reden" ? "reden" : "drucksachen";
+        url = `${WORKER_URL}/${ressource}?q=${encodeURIComponent(q||"")}&wp=21&max=25`;
+      }
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setItems(data.mandate || data.treffer || []);
+    } catch (e) {
+      setError("Fehler beim Laden: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function waehlePartei(p) {
+    setAktiv(p.id); setItems(null); setError("");
+    if (tab !== "programm" && tab !== "presse") laden(p, tab, query);
+  }
+  function waehleTab(t) {
+    setTab(t); setItems(null); setError("");
+    if (aktivePartei && t !== "programm" && t !== "presse") laden(aktivePartei, t, query);
+  }
+
+  return (
+    <div className="wrap">
+      <header>
+        <h1>Parteien-Informationsportal</h1>
+        <p>Programme, Reden, Personen und Aktuelles – mit Verweis auf die Originalquelle.</p>
+      </header>
+
+      {!konfiguriert &&
+        <div className="card warn">
+          <strong>Einrichtung nötig:</strong> Trage im Quelltext bei <code>WORKER_URL</code>
+          die Adresse deines Cloudflare Workers ein, dann lädt die App echte Daten.
+        </div>}
+
+      <div className="card">
+        <div className="parteien">
+          {parteien.map(p =>
+            <button key={p.id}
+              className={"partei-btn" + (aktiv===p.id ? " active":"")}
+              onClick={() => waehlePartei(p)}>
+              <span className="dot" style={{background: FARBEN[p.id]||"#999"}}></span>
+              {p.name}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {aktivePartei &&
+        <div className="card">
+          <div className="tabs">
+            {TABS.map(t =>
+              <button key={t.id}
+                className={"tab" + (tab===t.id ? " active":"")}
+                onClick={() => waehleTab(t.id)}>{t.label}</button>
+            )}
+          </div>
+
+          {(tab==="reden" || tab==="drucksachen") &&
+            <div className="searchrow">
+              <input value={query} onChange={e=>setQuery(e.target.value)}
+                onKeyDown={e=> e.key==="Enter" && laden(aktivePartei, tab, query)}
+                placeholder="Thema suchen (z.B. Migration, Klima, Rente)…" />
+              <button className="btn" disabled={loading}
+                onClick={()=>laden(aktivePartei, tab, query)}>Suchen</button>
+            </div>}
+
+          <div style={{marginTop:"14px"}}>
+            {loading && <div className="loading">Lädt…</div>}
+            {error && <div className="loading" style={{color:"#c0392b"}}>{error}</div>}
+
+            {tab==="programm" && !loading &&
+              <Linkblock partei={aktivePartei} feld="programm_url"
+                text="Offizielles Parteiprogramm öffnen"
+                leer="Programm-Link wird noch ergänzt." />}
+
+            {tab==="presse" && !loading &&
+              <Linkblock partei={aktivePartei} feld="presse_url"
+                text="Pressemitteilungen der Partei öffnen"
+                leer="Presse-Link wird noch ergänzt." />}
+
+            {tab==="personen" && items &&
+              (items.length ? items.map((m,i)=>
+                <div className="item" key={i}>
+                  <h3>{m.politiker || "—"}</h3>
+                  <div className="meta">{[m.parlament, m.fraktion].filter(Boolean).join(" · ")}</div>
+                  {m.aw_url &&
+                    <a className="quelle" href={"https://www.abgeordnetenwatch.de"+m.aw_url}
+                      target="_blank" rel="noopener">Profil & Abstimmungen ansehen →</a>}
+                </div>
+              ) : <div className="empty">Keine Mandate gefunden.</div>)}
+
+            {(tab==="reden"||tab==="drucksachen") && items &&
+              (items.length ? items.map((t,i)=>
+                <div className="item" key={i}>
+                  <h3>{t.titel || "—"}</h3>
+                  <div className="meta">{[t.typ, t.datum].filter(Boolean).join(" · ")}</div>
+                  {t.fundstelle &&
+                    <a className="quelle" href={t.fundstelle} target="_blank" rel="noopener">
+                      Originaldokument (PDF) →</a>}
+                </div>
+              ) : <div className="empty">Keine Treffer – anderen Suchbegriff probieren.</div>)}
+
+            {(tab==="reden"||tab==="drucksachen") && !aktivePartei?.im_bundestag && !loading &&
+              <div className="empty">
+                {aktivePartei.name} ist nicht im Bundestag vertreten – nutze hier den Reiter
+                „Presse / Aktuelles".
+              </div>}
+          </div>
+        </div>}
+
+      {!aktivePartei &&
+        <div className="card empty">Bitte oben eine Partei auswählen.</div>}
+
+      <footer>
+        Quellen: Deutscher Bundestag (DIP) · abgeordnetenwatch.de (CC0) · offizielle Partei-Websites.
+        Diese App stellt Primärquellen neutral dar und nimmt keine Wertung vor.
+      </footer>
+    </div>
+  );
+}
+
+function Linkblock({partei, feld, text, leer}) {
+  const url = partei[feld];
+  if (!url) return <div className="empty">{leer}</div>;
+  return <a className="biglink" href={url} target="_blank" rel="noopener">{text} →</a>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
