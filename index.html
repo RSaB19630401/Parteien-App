@@ -87,7 +87,7 @@ const TABS = [
 ];
 
 function App() {
-  const konfiguriert = !WORKER_URL.includes("DEIN-WORKER");
+  const konfiguriert = !WORKER_URL.includes("https://parteien-info.rsab1963.workers.dev/);
   const [parteien, setParteien] = useState(FALLBACK);
   const [aktiv, setAktiv] = useState(null);
   const [tab, setTab] = useState("personen");
