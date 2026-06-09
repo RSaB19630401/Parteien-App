@@ -48,6 +48,15 @@
   .quelle { display: inline-block; margin-top: 8px; }
   .abschnitt { margin: 4px 0 10px; font-size: 1.05rem; }
   .empty, .loading { text-align: center; color: var(--muted); padding: 24px; }
+  .feldlabel { display: block; font-size: .75rem; color: var(--muted); margin-bottom: 6px;
+    text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .ministerium-select { width: 100%; padding: 12px; border: 2px solid var(--border);
+    border-radius: 10px; font-size: 1rem; background: #fff; color: var(--text); }
+  .subtabs { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .tab.leer { color: #b8bcc4; cursor: default; }
+  .tab:disabled { cursor: default; }
+  .badge-arbeit { display: inline-block; margin-left: 6px; font-size: .7rem; color: #9aa0a8;
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
   .biglink { display: inline-block; margin-top: 8px; padding: 10px 16px;
     background: var(--accent-soft); color: var(--accent); border-radius: 8px;
     text-decoration: none; font-weight: 600; }
@@ -123,9 +132,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Themenvergleich-Ansicht
-  const [themen, setThemen] = useState([]);
-  const [aktivesThema, setAktivesThema] = useState(null);
+  // Themenvergleich-Ansicht (Ministerium → Thema → Unterthema)
+  const [ministerien, setMinisterien] = useState([]);
+  const [mSel, setMSel] = useState(null);
+  const [tSel, setTSel] = useState(null);
+  const [uSel, setUSel] = useState(null);
   const [vergleich, setVergleich] = useState(null);
   const [vLoading, setVLoading] = useState(false);
 
@@ -135,9 +146,9 @@ function App() {
       .then(function(r){ return r.json(); })
       .then(function(d){ if (d.parteien) setParteien(d.parteien); })
       .catch(function(){});
-    fetch(WORKER_URL + "/themen")
+    fetch(WORKER_URL + "/ministerien")
       .then(function(r){ return r.json(); })
-      .then(function(d){ if (d.themen) setThemen(d.themen); })
+      .then(function(d){ if (d.ministerien) setMinisterien(d.ministerien); })
       .catch(function(){});
   }, []);
 
@@ -181,13 +192,17 @@ function App() {
     if (aktivePartei && t !== "programm" && t !== "presse") laden(aktivePartei, t, query);
   }
 
-  async function ladeVergleich(themaId) {
-    setAktivesThema(themaId); setVergleich(null); setVLoading(true);
+  async function ladeVergleich(mId, tId, uId) {
+    setMSel(mId); setTSel(tId); setUSel(uId || null);
+    setVergleich(null); setVLoading(true);
     try {
-      const res = await fetch(WORKER_URL + "/themenvergleich?thema=" + encodeURIComponent(themaId));
+      var qs = "ministerium=" + encodeURIComponent(mId) + "&thema=" + encodeURIComponent(tId);
+      if (uId) qs += "&unterthema=" + encodeURIComponent(uId);
+      const res = await fetch(WORKER_URL + "/vergleich?" + qs);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setVergleich(data.positionen || []);
+      if (data.unterthema_id) setUSel(data.unterthema_id);
     } catch (e) {
       setVergleich([]);
     } finally {
@@ -195,10 +210,34 @@ function App() {
     }
   }
 
+  function erstesUnterthema(t) {
+    if (!t || !t.unterthemen.length) return null;
+    var b = t.unterthemen.find(function(u){ return u.befuellt; });
+    return (b || t.unterthemen[0]).id;
+  }
+
+  function waehleMinisterium(mId) {
+    const m = ministerien.find(function(x){ return x.id === mId; });
+    if (!m || m.status !== "aktiv" || !m.themen.length) {
+      setMSel(mId); setTSel(null); setUSel(null); setVergleich(null); return;
+    }
+    const t = m.themen[0];
+    ladeVergleich(m.id, t.id, erstesUnterthema(t));
+  }
+  function waehleThema(tId) {
+    const m = ministerien.find(function(x){ return x.id === mSel; });
+    const t = m && m.themen.find(function(x){ return x.id === tId; });
+    ladeVergleich(mSel, tId, erstesUnterthema(t));
+  }
+  function waehleUnterthema(uId) {
+    ladeVergleich(mSel, tSel, uId);
+  }
+
   function wechsleAnsicht(a) {
     setAnsicht(a);
-    if (a === "vergleich" && !aktivesThema && themen.length) {
-      ladeVergleich(themen[0].id);
+    if (a === "vergleich" && !mSel && ministerien.length) {
+      const first = ministerien.find(function(m){ return m.status === "aktiv"; });
+      if (first) waehleMinisterium(first.id);
     }
   }
 
@@ -307,26 +346,61 @@ function App() {
     );
   }
 
-  // ── Render: Themenvergleich ───────────────────────────────────────────
+  // ── Render: Themenvergleich (Ministerium → Thema → Unterthema) ────────────
   function renderVergleich() {
+    const m = ministerien.find(function(x){ return x.id === mSel; });
+    const t = m && m.themen.find(function(x){ return x.id === tSel; });
     return h("div", null,
+
       h("div", {className:"card"},
-        h("div", {className:"tabs"},
-          themen.length === 0
-            ? h("div", {className:"empty"}, "Themen werden geladen…")
-            : themen.map(function(t){
-                return h("button", {
-                  key:t.id,
-                  className:"tab" + (aktivesThema===t.id ? " active":""),
-                  onClick:function(){ ladeVergleich(t.id); }
-                }, t.titel);
+        h("label", {className:"feldlabel"}, "Ministerium"),
+        ministerien.length === 0
+          ? h("div", {className:"empty"}, "Ministerien werden geladen…")
+          : h("select", {
+              className:"ministerium-select",
+              value: mSel || "",
+              onChange: function(e){ waehleMinisterium(e.target.value); }
+            },
+              ministerien.map(function(mm){
+                return h("option", { key:mm.id, value:mm.id, disabled: mm.status !== "aktiv" },
+                  mm.kuerzel + " – " + mm.name + (mm.status !== "aktiv" ? "  (in Arbeit)" : ""));
               })
+            )
+      ),
+
+      m && m.status === "aktiv" && m.themen.length > 0 && h("div", {className:"card"},
+        h("label", {className:"feldlabel"}, "Thema"),
+        h("div", {className:"tabs"},
+          m.themen.map(function(tt){
+            return h("button", {
+              key:tt.id,
+              className:"tab" + (tSel===tt.id ? " active":""),
+              onClick:function(){ waehleThema(tt.id); }
+            }, tt.titel);
+          })
+        ),
+        t && h("div", {className:"tabs subtabs"},
+          t.unterthemen.map(function(uu){
+            return h("button", {
+              key:uu.id,
+              className:"tab" + (uSel===uu.id ? " active":"") + (uu.befuellt ? "" : " leer"),
+              disabled: !uu.befuellt,
+              title: uu.befuellt ? "" : "in Arbeit",
+              onClick:function(){ if (uu.befuellt) waehleUnterthema(uu.id); }
+            },
+              uu.titel,
+              uu.befuellt ? null : h("span", {className:"badge-arbeit"}, "in Arbeit")
+            );
+          })
         )
       ),
 
+      m && m.status !== "aktiv" && h("div", {className:"card empty"},
+        m.name + " – Inhalte sind in Arbeit."),
+
       vLoading && h("div", {className:"card loading"}, "Lädt…"),
 
-      vergleich && h("div", {className:"card"},
+      vergleich && !vLoading && h("div", {className:"card"},
         vergleich.map(function(p,i){
           return h("div", {className:"item", key:i},
             h("h3", null,
