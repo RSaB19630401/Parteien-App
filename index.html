@@ -61,6 +61,20 @@
     background: var(--accent-soft); color: var(--accent); border-radius: 8px;
     text-decoration: none; font-weight: 600; }
   footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 24px 0; }
+  .backlink { background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: .9rem; font-weight: 600; padding: 0 0 10px; }
+  .thema-titel { margin: 0 0 4px; font-size: 1.3rem; }
+  .thema-context { color: var(--muted); font-size: .85rem; }
+  .themen-zaehler { color: var(--muted); font-size: .8rem; margin-top: 10px; }
+  .themenliste { display: flex; flex-direction: column; gap: 6px; }
+  .thema-eintrag { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    text-align: left; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+    background: #fff; cursor: pointer; transition: all .12s; width: 100%; }
+  .thema-eintrag:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .thema-eintrag-titel { font-weight: 600; font-size: 1rem; color: var(--text); }
+  .thema-eintrag-ressort { font-size: .8rem; color: var(--muted); }
+  .clearbtn { padding: 10px 14px; background: #eef0f3; color: var(--muted); border: none;
+    border-radius: 8px; cursor: pointer; font-size: 1rem; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -140,15 +154,20 @@ function App() {
   const [vergleich, setVergleich] = useState(null);
   const [vLoading, setVLoading] = useState(false);
 
+  // Themen-Ansicht (flache, alphabetische Liste mit Suche)
+  const [themenliste, setThemenliste] = useState([]);
+  const [themenQuery, setThemenQuery] = useState("");
+  const [themaSel, setThemaSel] = useState(null);
+
   useEffect(function() {
     if (!konfiguriert) return;
     fetch(WORKER_URL + "/parteien")
       .then(function(r){ return r.json(); })
       .then(function(d){ if (d.parteien) setParteien(d.parteien); })
       .catch(function(){});
-    fetch(WORKER_URL + "/ministerien")
+    fetch(WORKER_URL + "/themenliste")
       .then(function(r){ return r.json(); })
-      .then(function(d){ if (d.ministerien) setMinisterien(d.ministerien); })
+      .then(function(d){ if (d.themen) setThemenliste(d.themen); })
       .catch(function(){});
   }, []);
 
@@ -233,12 +252,29 @@ function App() {
     ladeVergleich(mSel, tSel, uId);
   }
 
+  async function ladeThema(item) {
+    setThemaSel(item);
+    setVergleich(null); setVLoading(true);
+    try {
+      var qs = "ministerium=" + encodeURIComponent(item.ministerium_id) +
+               "&thema=" + encodeURIComponent(item.thema_id) +
+               "&unterthema=" + encodeURIComponent(item.unterthema_id);
+      const res = await fetch(WORKER_URL + "/vergleich?" + qs);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setVergleich(data.positionen || []);
+    } catch (e) {
+      setVergleich([]);
+    } finally {
+      setVLoading(false);
+    }
+  }
+  function zurueckZurListe() {
+    setThemaSel(null); setVergleich(null);
+  }
+
   function wechsleAnsicht(a) {
     setAnsicht(a);
-    if (a === "vergleich" && !mSel && ministerien.length) {
-      const first = ministerien.find(function(m){ return m.status === "aktiv"; });
-      if (first) waehleMinisterium(first.id);
-    }
   }
 
   // ── Render: Einzelpartei ──────────────────────────────────────────────
@@ -346,76 +382,76 @@ function App() {
     );
   }
 
-  // ── Render: Themenvergleich (Ministerium → Thema → Unterthema) ────────────
-  function renderVergleich() {
-    const m = ministerien.find(function(x){ return x.id === mSel; });
-    const t = m && m.themen.find(function(x){ return x.id === tSel; });
-    return h("div", null,
-
-      h("div", {className:"card"},
-        h("label", {className:"feldlabel"}, "Ministerium"),
-        ministerien.length === 0
-          ? h("div", {className:"empty"}, "Ministerien werden geladen…")
-          : h("select", {
-              className:"ministerium-select",
-              value: mSel || "",
-              onChange: function(e){ waehleMinisterium(e.target.value); }
-            },
-              ministerien.map(function(mm){
-                return h("option", { key:mm.id, value:mm.id, disabled: mm.status !== "aktiv" },
-                  mm.kuerzel + " – " + mm.name + (mm.status !== "aktiv" ? "  (in Arbeit)" : ""));
-              })
-            )
-      ),
-
-      m && m.status === "aktiv" && m.themen.length > 0 && h("div", {className:"card"},
-        h("label", {className:"feldlabel"}, "Thema"),
-        h("div", {className:"tabs"},
-          m.themen.map(function(tt){
-            return h("button", {
-              key:tt.id,
-              className:"tab" + (tSel===tt.id ? " active":""),
-              onClick:function(){ waehleThema(tt.id); }
-            }, tt.titel);
-          })
+  // ── Render: Themen (flache, alphabetische Liste mit Suche) ────────────────
+  function renderThemen() {
+    if (themaSel) {
+      return h("div", null,
+        h("div", {className:"card"},
+          h("button", {className:"backlink", onClick:zurueckZurListe}, "← Alle Themen"),
+          h("h2", {className:"thema-titel"}, themaSel.titel),
+          h("div", {className:"thema-context"}, "Ressort: " + themaSel.ministerium)
         ),
-        t && h("div", {className:"tabs subtabs"},
-          t.unterthemen.map(function(uu){
-            return h("button", {
-              key:uu.id,
-              className:"tab" + (uSel===uu.id ? " active":"") + (uu.befuellt ? "" : " leer"),
-              disabled: !uu.befuellt,
-              title: uu.befuellt ? "" : "in Arbeit",
-              onClick:function(){ if (uu.befuellt) waehleUnterthema(uu.id); }
-            },
-              uu.titel,
-              uu.befuellt ? null : h("span", {className:"badge-arbeit"}, "in Arbeit")
+
+        vLoading && h("div", {className:"card loading"}, "Lädt…"),
+
+        vergleich && !vLoading && h("div", {className:"card"},
+          vergleich.map(function(p,i){
+            return h("div", {className:"item", key:i},
+              h("h3", null,
+                h("span", {className:"dot", style:{background:FARBEN[p.partei_id]||"#999"}}),
+                p.partei
+              ),
+              p.text
+                ? h("p", null, p.text)
+                : h("p", {style:{color:"var(--muted)"}}, "Keine eigenständige Position im Programm hervorgehoben."),
+              p.quelle && h("div", {className:"meta"},
+                "Quelle: ",
+                h("a", {href:p.quelle.url, target:"_blank", rel:"noopener"}, p.quelle.name)
+              )
             );
           })
         )
+      );
+    }
+
+    var q = themenQuery.trim().toLowerCase();
+    var gefiltert = themenliste.filter(function(it){
+      if (!q) return true;
+      return (it.titel + " " + it.ministerium).toLowerCase().indexOf(q) !== -1;
+    });
+
+    return h("div", null,
+      h("div", {className:"card"},
+        h("label", {className:"feldlabel"}, "Thema suchen"),
+        h("div", {className:"searchrow"},
+          h("input", {
+            value: themenQuery,
+            onChange: function(e){ setThemenQuery(e.target.value); },
+            placeholder: "z. B. Rente, Tempolimit, Mietrecht, Migration …"
+          }),
+          themenQuery && h("button", {className:"clearbtn", onClick:function(){ setThemenQuery(""); }}, "×")
+        ),
+        themenliste.length > 0 && h("div", {className:"themen-zaehler"},
+          gefiltert.length + " von " + themenliste.length + " Themen")
       ),
 
-      m && m.status !== "aktiv" && h("div", {className:"card empty"},
-        m.name + " – Inhalte sind in Arbeit."),
-
-      vLoading && h("div", {className:"card loading"}, "Lädt…"),
-
-      vergleich && !vLoading && h("div", {className:"card"},
-        vergleich.map(function(p,i){
-          return h("div", {className:"item", key:i},
-            h("h3", null,
-              h("span", {className:"dot", style:{background:FARBEN[p.partei_id]||"#999"}}),
-              p.partei
-            ),
-            p.text
-              ? h("p", null, p.text)
-              : h("p", {style:{color:"var(--muted)"}}, "Keine eigenständige Position im Programm hervorgehoben."),
-            p.quelle && h("div", {className:"meta"},
-              "Quelle: ",
-              h("a", {href:p.quelle.url, target:"_blank", rel:"noopener"}, p.quelle.name)
-            )
-          );
-        })
+      h("div", {className:"card"},
+        themenliste.length === 0
+          ? h("div", {className:"empty"}, "Themen werden geladen…")
+          : gefiltert.length === 0
+            ? h("div", {className:"empty"}, "Kein Thema gefunden – anderen Suchbegriff probieren.")
+            : h("div", {className:"themenliste"},
+                gefiltert.map(function(it, i){
+                  return h("button", {
+                    key: i,
+                    className: "thema-eintrag",
+                    onClick: function(){ ladeThema(it); }
+                  },
+                    h("span", {className:"thema-eintrag-titel"}, it.titel),
+                    h("span", {className:"thema-eintrag-ressort"}, it.ministerium)
+                  );
+                })
+              )
       )
     );
   }
@@ -424,7 +460,7 @@ function App() {
 
     h("header", null,
       h("h1", null, "Parteien-Informationsportal"),
-      h("p", null, "Programme, Reden, Personen und Themenvergleich – mit Verweis auf die Originalquelle.")
+      h("p", null, "Programme, Reden, Personen und Themen von A–Z – mit Verweis auf die Originalquelle.")
     ),
 
     !konfiguriert && h("div", {className:"card warn"},
@@ -440,10 +476,10 @@ function App() {
       h("button", {
         className: ansicht==="vergleich" ? "active" : "",
         onClick: function(){ wechsleAnsicht("vergleich"); }
-      }, "Themenvergleich")
+      }, "Themen A–Z")
     ),
 
-    ansicht === "partei" ? renderPartei() : renderVergleich(),
+    ansicht === "partei" ? renderPartei() : renderThemen(),
 
     h("footer", null,
       "Quellen: Deutscher Bundestag (DIP) · abgeordnetenwatch.de (CC0) · offizielle Partei-Websites und -Programme. " +
